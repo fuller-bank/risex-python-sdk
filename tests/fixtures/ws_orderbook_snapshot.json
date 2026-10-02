@@ -1,0 +1,37 @@
+{
+  "method": "snapshot",
+  "channel": "orderbook",
+  "type": "snapshot",
+  "market_id": "1",
+  "data": {
+    "market_id": 1,
+    "bids": [
+      {
+        "price": "63218.5",
+        "quantity": "1.317053",
+        "order_count": 1
+      },
+      {
+        "price": "63215.2",
+        "quantity": "0.004744",
+        "order_count": 1
+      }
+    ],
+    "asks": [
+      {
+        "price": "63220",
+        "quantity": "1.317053",
+        "order_count": 1
+      },
+      {
+        "price": "63222.6",
+        "quantity": "0.004744",
+        "order_count": 1
+      }
+    ]
+  },
+  "level_count": 4,
+  "block_number": 19328296,
+  "log_index": 0,
+  "worker_timestamp": "1786934053513837410"
+}

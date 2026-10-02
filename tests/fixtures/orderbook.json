@@ -1,0 +1,32 @@
+{
+  "data": {
+    "market_id": "1",
+    "bids": [
+      {
+        "price": "84567.8",
+        "quantity": "0.118587",
+        "order_count": 1
+      },
+      {
+        "price": "84545.8",
+        "quantity": "0.0593",
+        "order_count": 1
+      }
+    ],
+    "asks": [
+      {
+        "price": "84596.8",
+        "quantity": "0.118594",
+        "order_count": 1
+      },
+      {
+        "price": "84627.3",
+        "quantity": "0.05929",
+        "order_count": 1
+      }
+    ],
+    "total_bids": "55",
+    "total_asks": "13"
+  },
+  "request_id": "a04819bb-2d23-472a-981b-541a9dab67a4"
+}

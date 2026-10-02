@@ -1,0 +1,54 @@
+{
+  "data": {
+    "markets": [
+      {
+        "market_id": "1",
+        "config": {
+          "name": "BTC/USDC",
+          "quote": "0x8c49baeec2ea2356598ef33ea5dd52267643e677",
+          "step_size": "0.000001",
+          "step_price": "0.1",
+          "maintenance_margin_factor": "75",
+          "max_leverage": "50",
+          "min_order_size": "0.0001",
+          "unlocked": true,
+          "open_interest_limit": "0"
+        },
+        "base_asset_symbol": "BTC/USDC",
+        "quote_asset_symbol": "USDC",
+        "underlying": "BTC/USDC",
+        "display_name": "BTC/USDC",
+        "quote_volume_24h": "9318288.3140517",
+        "change_24h": "-252.2",
+        "high_24h": "84998",
+        "low_24h": "82852.6",
+        "last_price": "84519.4",
+        "mark_price": "84533.372074747582246946",
+        "index_price": "84321.908936146751220803",
+        "max_position_size": "100000000",
+        "open_interest": "14637.638928",
+        "funding_interval": "3600000000000",
+        "next_funding_time": "1790874000000000000",
+        "post_only": false,
+        "last_cumulative_funding": "0",
+        "predicted_funding_rate": "0",
+        "display_base_asset_symbol": "BTC/USDC",
+        "accumulated_funding": "-2520.579986610919358881",
+        "current_funding_rate": "0.000369516940418464",
+        "funding_rate_8h": "0.002956135523347712",
+        "active": true,
+        "category": "crypto",
+        "search_tags": [
+          "crypto",
+          "macro",
+          "majors"
+        ],
+        "is_new": false,
+        "reduce_only": false,
+        "display_at": "0"
+      }
+    ],
+    "cached_at": "1790872262"
+  },
+  "request_id": "af30a28f-4321-434c-a82e-e5cb652102cd"
+}
