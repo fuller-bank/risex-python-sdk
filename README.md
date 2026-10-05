@@ -35,6 +35,14 @@ remain to be validated, with explicit test gates provided.
 
 ## Installation and environments
 
+Install the alpha release from PyPI:
+
+```bash
+python -m pip install risex-python-sdk==0.1.0a2
+```
+
+For local development:
+
 ```bash
 python -m venv .venv
 source .venv/bin/activate
@@ -43,8 +51,25 @@ python -m pip install -e ".[dev]"
 
 An independent consumer can install the checkout with
 `pip install -e /absolute/path/to/risex-python-sdk`, or install the built wheel.
-No package registry publication has been performed; choose a license and
-publication destination before public distribution.
+The SDK is distributed under the [MIT license](LICENSE).
+
+The repository owner's manual **Publish to PyPI** workflow builds, validates and
+publishes releases from `main` using GitHub Trusted Publishing. Before the first
+release, register a pending GitHub Trusted Publisher in your PyPI account:
+
+| Field | Value |
+| --- | --- |
+| PyPI project name | `risex-python-sdk` |
+| GitHub owner | `loinsssss` |
+| Repository | `risex-python-sdk` |
+| Workflow filename | `publish.yml` |
+| Environment | `pypi` |
+
+Run the workflow on `main` with the exact package version, initially `0.1.0a2`.
+Only the repository owner's account can run the publishing job. No PyPI token
+needs to be stored in GitHub. For subsequent releases, update the version in
+`pyproject.toml`, `risex.__version__` and the HTTP user agent together; PyPI release
+versions cannot be overwritten.
 
 ```python
 from risex import RiseXClient, RiseXConfig

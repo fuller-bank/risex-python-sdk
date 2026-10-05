@@ -106,5 +106,6 @@ Do not infer live acceptance from an offline signature test.
 Record validation environment/results and unresolved limits without keys or
 signed authentication frames.
 
-Select a license and publication destination before public distribution.
-Local builds do not publish the package or execute funded integration gates.
+The SDK uses the MIT license. Maintainer releases use the manual PyPI workflow
+described in the README. Local builds do not publish the package or execute
+funded integration gates.
