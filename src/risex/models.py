@@ -37,7 +37,12 @@ class WireModel(BaseModel):
             raise ValueError("RISEx numeric fields must use exact strings or integers")
         if isinstance(value, bool) and info.field_name is not None:
             annotation = cls.model_fields[info.field_name].annotation
-            if annotation is not bool and bool not in get_args(annotation):
+            args = get_args(annotation)
+            if (
+                annotation is not bool
+                and bool not in args
+                and not any(type(arg) is bool for arg in args)
+            ):
                 raise ValueError("Booleans cannot represent RISEx numeric or string fields")
         return value
 
@@ -376,6 +381,7 @@ class AccountPosition(WireModel):
     quote_balance: FiniteDecimal | None = None
     free_isolated_usdc_balance: FiniteDecimal | None = None
     adl_price: NonnegativeDecimal | None = None
+    in_isolated_liquidation: bool | None = None
 
     @field_validator(
         "avg_entry_price",
@@ -399,6 +405,96 @@ class AccountPosition(WireModel):
 
 class PositionResponse(WireModel):
     position: AccountPosition
+
+
+class PortfolioSummary(WireModel):
+    """Provider USD amounts; cross maintenance excludes isolated positions."""
+
+    collateral_margin_balance: FiniteDecimal
+    cross_margin_balance: FiniteDecimal
+    free_collateral: FiniteDecimal
+    total_account_value: FiniteDecimal
+    total_notional: NonnegativeDecimal
+    total_initial_margin: NonnegativeDecimal
+    total_maintenance_margin: NonnegativeDecimal
+    in_liquidation: Annotated[bool, Field(strict=True)]
+    risk_level: Literal["NORMAL", "LIQUIDATION", "ADL"]
+    usdc_balance: FiniteDecimal | None = None
+    total_unrealized_pnl: FiniteDecimal | None = None
+    margin_health: NonnegativeDecimal | None = None
+    total_isolated_order_reserve: NonnegativeDecimal | None = None
+
+
+class PortfolioPosition(WireModel):
+    # This route omits settlement fields that the direct chain route supplies.
+    market_id: MarketID
+    size: FiniteDecimal
+    side: Literal[0, 1]
+    margin_mode: Literal[0, 1]
+    isolated_usdc_balance: NonnegativeDecimal
+    mark_price: PositiveDecimal
+    avg_entry_price: NonnegativeDecimal
+    leverage: NonnegativeDecimal
+    unrealized_pnl: FiniteDecimal
+    initial_margin_requirement: NonnegativeDecimal
+    maintenance_margin_requirement: NonnegativeDecimal
+    in_isolated_liquidation: Annotated[bool, Field(strict=True)]
+    quote_amount: FiniteDecimal | None = None
+    last_funding_payment: FiniteDecimal | None = None
+
+    @field_validator("quote_amount", "last_funding_payment", mode="before")
+    @classmethod
+    def empty_settlement_number(cls, value: object) -> object:
+        return None if value == "" else value
+
+
+class PortfolioDetails(WireModel):
+    account: EthereumAddress
+    summary: PortfolioSummary
+    positions: tuple[PortfolioPosition, ...]
+
+
+class TransactionReceipt(WireModel):
+    status: Literal[1]
+    block_number: Annotated[int, Field(ge=0)]
+    gas_used: Annotated[int, Field(ge=0)]
+
+
+class DecodedError(WireModel):
+    selector: str = ""
+    signature: str = ""
+    name: str = ""
+    parameters: tuple[str, ...] = ()
+    message: str = ""
+
+
+class DecodedTransaction(WireModel):
+    tx_hash: Annotated[str, Field(pattern=r"^0x[0-9a-fA-F]{64}$")] | None = None
+    success: Annotated[bool, Field(strict=True)]
+    error: DecodedError | None = None
+
+    @model_validator(mode="after")
+    def consistent_outcome(self) -> DecodedTransaction:
+        if self.success and self.error is not None:
+            raise ValueError("Successful transaction cannot contain a decoded revert error")
+        return self
+
+
+class AccountUpdate(WireModel):
+    transaction_hash: Annotated[str, Field(pattern=r"^0x[0-9a-fA-F]{64}$")]
+    block_number: Annotated[int, Field(ge=0)]
+    receipt: TransactionReceipt
+
+    @model_validator(mode="after")
+    def consistent_block(self) -> AccountUpdate:
+        if self.block_number != self.receipt.block_number:
+            raise ValueError("Transaction and receipt block numbers disagree")
+        return self
+
+
+class TpslCancellation(WireModel):
+    success: Literal[True]
+    cancelled_count: Annotated[int, Field(ge=0)]
 
 
 class Position(WireModel):
@@ -454,8 +550,8 @@ class OrderRequest(BaseModel):
     market_id: Annotated[int, Field(gt=0, lt=2**16, strict=True)]
     side: OrderSide
     quantity: PositiveDecimal
-    # For market orders this is the worst acceptable execution price.
-    price: PositiveDecimal
+    # Native market orders encode a zero price; use LIMIT IOC/FOK for a price bound.
+    price: NonnegativeDecimal
     order_type: OrderType = OrderType.LIMIT
     time_in_force: TimeInForce | None = None
     post_only: Annotated[bool, Field(strict=True)] = False
@@ -490,10 +586,17 @@ class OrderRequest(BaseModel):
     def validate_execution(self) -> OrderRequest:
         tif = self.effective_time_in_force
         if self.order_type == OrderType.MARKET:
+            if self.price != 0:
+                raise ValueError(
+                    "market orders require price=0; use LIMIT IOC/FOK for a price bound"
+                )
             if tif not in (TimeInForce.FOK, TimeInForce.IOC) or self.post_only:
                 raise ValueError("market orders require FOK/IOC and cannot be post_only")
-        elif self.post_only and tif in (TimeInForce.FOK, TimeInForce.IOC):
-            raise ValueError("post_only requires a resting GTC/GTT order")
+        else:
+            if self.price <= 0:
+                raise ValueError("limit orders require a positive price")
+            if self.post_only and tif in (TimeInForce.FOK, TimeInForce.IOC):
+                raise ValueError("post_only requires a resting GTC/GTT order")
         if (tif == TimeInForce.GTT) != bool(self.ttl_units):
             raise ValueError("ttl_units must be nonzero exactly when time_in_force is GTT")
         if self.builder_fee_bps and not self.builder_id:

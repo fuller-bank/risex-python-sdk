@@ -96,6 +96,7 @@ class RestClient:
         params: list[tuple[str, str]] | None = None,
         bearer_token: SecretStr | None = None,
         exact_json_numbers: bool = False,
+        error_is_data: bool = False,
     ) -> dict[str, Any]:
         if self._client.is_closed:
             raise ClientClosedError("RISEx client is closed")
@@ -144,7 +145,9 @@ class RestClient:
                 raise ProtocolError("RISEx GET returned invalid JSON") from exc
             if not isinstance(body, dict):
                 raise ProtocolError("RISEx GET response must be an object")
-            if body.get("error") is not None:
+            # Transaction decoding uses `error` as successful-response data, not
+            # an API failure envelope. HTTP failure handling above stays unchanged.
+            if body.get("error") is not None and not error_is_data:
                 if bearer_token is not None:
                     raise APIError(
                         "RISEx authenticated GET failed", status_code=response.status_code

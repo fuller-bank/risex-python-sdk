@@ -188,7 +188,9 @@ else:
 ```
 
 Choose actual quantities/prices using current market metadata. A market order
-uses `order_type=OrderType.MARKET` and still requires an explicit `price` bound.
+uses `order_type=OrderType.MARKET` with `price=Decimal("0")`, matching the native
+zero-price encoding. For a maximum buy price or minimum sell price, use
+`OrderType.LIMIT` with `TimeInForce.IOC` or `TimeInForce.FOK` instead.
 Default time-in-force is IOC for market orders, GTC for limit orders.
 GTT requires nonzero protocol `ttl_units`; reduce-only, post-only and STP flags
 are validated. The SDK checks market activity, precision and protocol widths

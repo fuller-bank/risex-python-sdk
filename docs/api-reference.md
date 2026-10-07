@@ -56,6 +56,7 @@ Page numbers start at 1; open-order offsets start at 0.
 | `get_orderbook(market_id, limit=50)` | `OrderbookSnapshot` with `.bids` and `.asks`; limit 1–250 |
 | `get_signing_domain()` | `SigningDomain` |
 | `get_system_config()` | `SystemConfig` |
+| `decode_transaction(tx_hash)` | `DecodedTransaction`: success flag and optional decoded contract error |
 | `initialize(force_refresh=False)` | Validated, cached `ProtocolMetadata` |
 | `get_nonce_state(account=None)` | `NonceState` with anchor, index and bitmap |
 | `get_signer_status(account=None, signer=None)` | `SessionKeyStatus` with `.active` |
@@ -63,6 +64,17 @@ Page numbers start at 1; open-order offsets start at 0.
 `market_ids` is a sequence of unique positive integers. Omitted/empty IDs
 request all markets. `initialize()` performs reads only; signing code invokes
 it when necessary. `force_refresh=True` refreshes its metadata cache.
+
+`decode_transaction()` uses the public [transaction decoder](https://developer.rise.trade/reference/decodetx)
+(`GET /v1/tx/{tx_hash}`); it requires no account or signer and never submits a
+transaction. Hashes must contain `0x` followed by exactly 64 hexadecimal digits.
+If the provider includes a response hash, it must match the requested hash.
+`DecodedTransaction.success` is a required boolean. Its optional `.error` is a
+`DecodedError` retaining `.selector`, `.signature`, `.name`, `.parameters` (a tuple
+of strings) and `.message`. An unsuccessful transaction without decoded details
+remains `success=False, error=None`; the SDK does not invent a cause or replay it.
+Save the original transaction hash when handling an uncertain submission so it
+can be investigated later. Decoding does not replace fresh order/position reads.
 
 ### Accounts and pagination
 
@@ -190,7 +202,7 @@ of administrative mutation.
 | `market_id` | Required positive uint16 integer |
 | `side` | Required `OrderSide.BUY` (0) or `SELL` (1) |
 | `quantity` | Required positive finite `Decimal`, in human units |
-| `price` | Required positive finite `Decimal`; limit price or market execution bound |
+| `price` | Required finite `Decimal`: positive for LIMIT, exactly zero for MARKET |
 | `order_type` | `OrderType.LIMIT` (1); `MARKET` is 0 |
 | `time_in_force` | `None` chooses GTC for limits, IOC for market orders |
 | `post_only` | `False`; supported for resting limit GTC/GTT orders |
@@ -205,6 +217,11 @@ of administrative mutation.
 be post-only. GTT uses native protocol TTL units; do not pass a Unix timestamp
 or assume the field is seconds. Order precision and size/price encoding widths
 are checked against current metadata before a nonce is reserved.
+
+Compatibility correction: native MARKET orders use `price=Decimal("0")`
+(`price_ticks=0`). Previous SDK versions incorrectly required a positive market
+price. Use a positive-price LIMIT order with IOC/FOK when an execution price
+bound is needed. Neither form bypasses the exchange's own matching price bands.
 
 | Model | Fields commonly used by consumers |
 | --- | --- |
@@ -329,3 +346,30 @@ Invalid caller input can also raise `ValueError`, `TypeError` or Pydantic
 `ValidationError`. Reads have bounded retry rules; writes do not retry.
 Cancellation during transmission can raise `UnknownOutcomeError` because the
 mutation may have executed. See [recovery guidance](developer-guide.md#handle-uncertainty).
+
+## Portfolio risk and account controls (local 0.1.0a3.dev0)
+
+- `get_portfolio_details(account=None)` returns exact USD summary values and
+  signed decimal coin quantities, validates account scope and unique market IDs.
+  Cross margin/maintenance totals exclude isolated scopes. Blank settlement
+  fields in portfolio rows remain `None`; they are not silently converted to zero.
+- `update_leverage(market_id, leverage)` validates a positive uint8 value and the
+  current market maximum, then submits one VerifyWitness permit.
+- `update_margin_mode(market_id, isolated=bool)` submits one VerifyWitness permit.
+  A redundant setting can revert `MarginModeUnchanged`; read the current mode first.
+- `cancel_all_tpsl_orders(market_id)` signs `CancelAllTpslOrders` directly and returns
+  a confirmed success/count. It cancels accepted TP/SLs; triggered orders still
+  need reconciliation. This signature does not consume a bitmap nonce, so its
+  `MutationContext` nonce fields are `None`.
+
+Account setting replies require successful chain receipt status and consistent
+block numbers. Timeout, malformed reply or ambiguous server failure is not success
+and is never automatically replayed. The caller must independently reconcile.
+
+Live testnet unit finding (2026-10-07): indexed `Position.size` returned WAD integers
+(e.g. `290000000000000` for 0.00029 BTC), while `AccountPosition.size` and
+`PortfolioPosition.size` returned decimal coin quantities. Wire models retain
+provider values. Do not interchange the routes or infer units from magnitude.
+The portfolio side flag was observed as zero even for a negative short size;
+use signed size and independently compare the direct position read. Consumers
+must verify units/scope before using indexed quantities for orders or displays.

@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import math
+import re
 import secrets
 import time
 from collections.abc import AsyncIterator, Awaitable, Sequence
@@ -25,10 +27,12 @@ from .exceptions import (
 )
 from .models import (
     AccountSnapshot,
+    AccountUpdate,
     Balance,
     Balances,
     Cancellation,
     Channel,
+    DecodedTransaction,
     Fill,
     LoginSession,
     Market,
@@ -43,6 +47,8 @@ from .models import (
     OrderResponse,
     OrderStatus,
     OrderSubmission,
+    OrderType,
+    PortfolioDetails,
     Position,
     PositionResponse,
     PositionsResponse,
@@ -54,6 +60,7 @@ from .models import (
     SubmissionResolution,
     SystemConfig,
     TimeInForce,
+    TpslCancellation,
     TpslOrder,
     TpslOrdersResponse,
     TpslStatus,
@@ -66,6 +73,7 @@ from .rest import RestClient
 from .session import JwtSession
 from .signing import (
     Signer,
+    account_setting_action_hash,
     address,
     cancel_action_hash,
     cancel_all_action_hash,
@@ -229,6 +237,17 @@ class RiseXClient:
     async def get_system_config(self) -> SystemConfig:
         self._ensure_open()
         return _parse(SystemConfig, await self._rest.get("/v1/system/config"))
+
+    async def decode_transaction(self, tx_hash: str) -> DecodedTransaction:
+        """Read a transaction outcome and any provider-decoded contract revert details."""
+        self._ensure_open()
+        if not isinstance(tx_hash, str) or re.fullmatch(r"0x[0-9a-fA-F]{64}", tx_hash) is None:
+            raise ValueError("tx_hash must be 0x followed by 64 hexadecimal characters")
+        payload = await self._rest.get(f"/v1/tx/{tx_hash}", error_is_data=True)
+        result = _parse(DecodedTransaction, payload)
+        if result.tx_hash is not None and result.tx_hash.lower() != tx_hash.lower():
+            raise ProtocolError("Decoded transaction response belongs to another transaction")
+        return result
 
     @property
     def session(self) -> LoginSession | None:
@@ -456,6 +475,100 @@ class RiseXClient:
         if result.position.market_id not in (0, market_id):
             raise ProtocolError("Position response belongs to another market")
         return result
+
+    async def get_portfolio_details(self, *, account: str | None = None) -> PortfolioDetails:
+        self._ensure_open()
+        selected = self._account_address(account)
+        result = _parse(
+            PortfolioDetails,
+            await self._rest.get("/v1/portfolio/details", params=[("account", selected)]),
+        )
+        if result.account != selected:
+            raise ProtocolError("Portfolio response belongs to another account")
+        ids = [p.market_id for p in result.positions]
+        if len(ids) != len(set(ids)) or any(i <= 0 for i in ids):
+            raise ProtocolError("Portfolio contains duplicate or invalid market IDs")
+        return result
+
+    async def update_leverage(self, market_id: int, leverage: int) -> AccountUpdate:
+        """Single signed mutation; an unknown outcome must be reconciled, not replayed."""
+        self._ensure_open()
+        action_hash = account_setting_action_hash(market_id, leverage, setting="leverage")
+        markets = await self.get_markets(market_ids=[market_id], force_refresh=True)
+        market = next((m for m in markets.markets if m.market_id == market_id), None)
+        if market is None or market.config.max_leverage is None:
+            raise ProtocolError("Cannot verify market leverage limit")
+        if leverage > market.config.max_leverage:
+            raise ValueError("Leverage exceeds the market maximum")
+        return await self._update_account_setting(
+            market_id,
+            "/v1/account/leverage",
+            "update_leverage",
+            {"leverage": str(leverage)},
+            action_hash,
+        )
+
+    async def update_margin_mode(self, market_id: int, *, isolated: bool) -> AccountUpdate:
+        self._ensure_open()
+        if type(isolated) is not bool:
+            raise TypeError("isolated must be bool")
+        value = int(isolated)
+        return await self._update_account_setting(
+            market_id,
+            "/v1/account/margin-mode",
+            "update_margin_mode",
+            {"margin_mode": value},
+            account_setting_action_hash(market_id, value, setting="margin_mode"),
+        )
+
+    async def _update_account_setting(
+        self, market_id: int, path: str, operation: str, fields: dict[str, Any], action_hash: bytes
+    ) -> AccountUpdate:
+        account, _ = self._credentials()
+        await self.initialize()
+        async with self._nonces.operation_lock:
+            nonce = await self._nonces.reserve()
+            permit = await self._permit(action_hash, nonce)
+            return await self._submit(
+                path,
+                {"market_id": str(market_id), **fields, "permit_params": permit},
+                MutationContext(
+                    operation, account, nonce.anchor, nonce.bitmap_index, market_id=market_id
+                ),
+                AccountUpdate,
+            )
+
+    async def cancel_all_tpsl_orders(self, market_id: int) -> TpslCancellation:
+        """Cancel accepted TP/SLs only; triggered orders still require reconciliation."""
+        self._ensure_open()
+        validate_market_id(market_id)
+        account, signer = self._credentials()
+        metadata = await self.initialize()
+        deadline = int(time.time()) + self.config.permit_ttl_seconds
+        signature = await auth.sign(
+            signer,
+            typed_data(
+                metadata.domain.signing_values(),
+                "CancelAllTpslOrders",
+                {
+                    "account": account,
+                    "marketId": market_id,
+                    "deadline": deadline,
+                },
+            ),
+        )
+        return await self._submit(
+            "/v1/orders/tpsl/cancel-all",
+            {
+                "account": account,
+                "market_id": str(market_id),
+                "signer": address(signer.address),
+                "deadline": deadline,
+                "signature": base64.b64encode(signature).decode("ascii"),
+            },
+            MutationContext("cancel_all_tpsl_orders", account, None, None, market_id=market_id),
+            TpslCancellation,
+        )
 
     async def get_positions(
         self,
@@ -823,7 +936,11 @@ class RiseXClient:
         ):
             raise ValueError("Requested market only permits reduce-only resting orders")
         size_steps = market.config.quantity_to_steps(request.quantity)
-        price_ticks = market.config.price_to_ticks(request.price)
+        price_ticks = (
+            0
+            if request.order_type == OrderType.MARKET
+            else market.config.price_to_ticks(request.price)
+        )
         packed = pack_order(
             market_id=request.market_id,
             size_steps=size_steps,
@@ -976,14 +1093,16 @@ class RiseXClient:
         selected = self._account_address()
         if address(context.account) != selected:
             raise ValueError("Submission belongs to a different account")
-        state = await self.get_nonce_state()
-        consumed = (
-            bool((state.bitmap >> context.nonce_bitmap_index) & 1)
-            if state.nonce_anchor == context.nonce_anchor
-            else False
-            if state.nonce_anchor < context.nonce_anchor
-            else None
-        )
+        consumed = None
+        if context.nonce_anchor is not None and context.nonce_bitmap_index is not None:
+            state = await self.get_nonce_state()
+            consumed = (
+                bool((state.bitmap >> context.nonce_bitmap_index) & 1)
+                if state.nonce_anchor == context.nonce_anchor
+                else False
+                if state.nonce_anchor < context.nonce_anchor
+                else None
+            )
         found: list[Order] = []
         if context.operation == "place_order" and context.client_order_id:
             async for order in self.iter_order_history(
