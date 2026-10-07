@@ -21,6 +21,11 @@ DOMAIN_FIELDS = [
 ]
 
 STRUCTS = {
+    "Login": [
+        {"name": "account", "type": "address"},
+        {"name": "nonce", "type": "uint256"},
+        {"name": "deadline", "type": "uint32"},
+    ],
     "VerifyWitness": [
         {"name": "account", "type": "address"},
         {"name": "target", "type": "address"},

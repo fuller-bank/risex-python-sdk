@@ -107,7 +107,7 @@ are retained as strings.
 
 ## 4. Read an account and traverse pages
 
-Account reads require an address, but no private key. Set `RISEX_ACCOUNT` to your
+Balance/position/order reads require an address, but no private key. Set `RISEX_ACCOUNT` to your
 account's 0x-prefixed Ethereum address, then run:
 
 ```bash

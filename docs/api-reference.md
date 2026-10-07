@@ -77,7 +77,42 @@ it when necessary. `force_refresh=True` refreshes its metadata cache.
 | `get_order(order_id, market_id=None)` | One `Order` |
 | `get_order_history(...)` | `OrderHistory`: orders, page, has_next_page |
 | `get_trade_history(...)` | `TradeHistory`: trades (`Fill` models), page, has_next_page |
-| `get_account_snapshot(account=None, max_pages=1000)` | `AccountSnapshot`: balances, positions, open_orders |
+| `get_account_snapshot(account=None, max_pages=1000, include_conditional_orders=False)` | `AccountSnapshot`: balances, positions, open_orders, optional active conditional_orders |
+| `login()` | Token-free `LoginSession` metadata; uses configured owner/registered signer |
+| `refresh_session()` | Updated `LoginSession`; refreshes once and rotates in-memory tokens |
+| `logout()` | `True` after confirmed revocation, `False` if no local session existed |
+| `session` (property) | `LoginSession` or `None`; no raw tokens |
+| `get_user_fees()` | `UserFees`: actual account tier, taker/maker bps, volume, next-tier progress and schedule |
+| `get_tpsl_orders(...)` | `TpslOrdersResponse`: orders, total, page, limit, has_next_page |
+| `iter_tpsl_orders(...)` | Async iterator over `TpslOrder` |
+
+JWT login is explicit. `get_user_fees()` refreshes before expiry, but does not sign a
+new login automatically. Failed/uncertain refresh and HTTP 401 require explicit login.
+Tokens are private and in memory only. Token rotation is serialized; auth POSTs are
+not retried. The fee endpoint has no account override: it always uses the logged-in
+account. Only fee requests carry the bearer token; public reads and permit operations
+do not inherit it. Fee JSON numbers are parsed directly into Decimal, without a float
+round trip. Negative maker rebates are preserved.
+
+```text
+get_tpsl_orders(
+    *, account=None, market_id=None, page=1, limit=100, statuses=(),
+    stop_type="STOP_TYPE_NONE", start_time=None, end_time=None
+)
+iter_tpsl_orders(
+    *, account=None, market_id=None, page_size=100, max_pages=1000, statuses=(),
+    stop_type="STOP_TYPE_NONE", start_time=None, end_time=None
+)
+```
+
+The SDK explicitly sends `STOP_TYPE_NONE` to avoid the API's TAKE_PROFIT default.
+Other stop filters are `TAKE_PROFIT`/`STOP_LOSS`; statuses are the native
+`TPSL_ORDER_STATUS_ACCEPTED`, `TRIGGERED`, `SUCCESS`, `CANCELLED` values (each with
+the `TPSL_ORDER_STATUS_` prefix). `TpslOrder.active` includes accepted and triggered.
+Time filters are nanoseconds. Account/market/status/stop scopes, page sizes and totals
+are checked. Duplicate IDs, changing totals, incomplete pages and page-bound exhaustion
+raise `ProtocolError`; discard partial iterator results and fetch a new snapshot.
+REST pagination cannot promise an atomic view during concurrent order changes.
 
 History arguments:
 

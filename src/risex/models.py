@@ -266,6 +266,95 @@ class Balances(BaseModel):
     cross_margin: Balance
 
 
+class LoginSession(BaseModel):
+    """Public session metadata. Access/refresh tokens are never returned here."""
+
+    model_config = ConfigDict(frozen=True)
+    account: EthereumAddress
+    expires_in: Annotated[int, Field(gt=0, strict=True)]
+    token_type: Literal["Bearer"]
+
+
+class FeeScheduleEntry(WireModel):
+    tier: Annotated[int, Field(ge=0)]
+    threshold_usd: NonnegativeDecimal
+    taker_bps: Annotated[Decimal, Field(ge=0, lt=10000, allow_inf_nan=False)]
+    maker_bps: Annotated[Decimal, Field(gt=-10000, lt=10000, allow_inf_nan=False)]
+
+
+class NextTierProgress(FeeScheduleEntry):
+    remaining_usd: NonnegativeDecimal
+    progress_pct: Annotated[Decimal, Field(ge=0, le=100, allow_inf_nan=False)]
+
+
+class UserFees(WireModel):
+    tier: Annotated[int, Field(ge=0)]
+    taker_bps: Annotated[Decimal, Field(ge=0, lt=10000, allow_inf_nan=False)]
+    maker_bps: Annotated[Decimal, Field(gt=-10000, lt=10000, allow_inf_nan=False)]
+    weighted_14d_volume_usd: NonnegativeDecimal
+    applied_at: str
+    next_tier: NextTierProgress | None = None
+    schedule: tuple[FeeScheduleEntry, ...]
+    trial_tier: Annotated[int, Field(ge=0)] | None = None
+    trial_ends_at: str = ""
+    earned_tier: Annotated[int, Field(ge=0)] | None = None
+
+
+TpslStatus = Literal[
+    "TPSL_ORDER_STATUS_ACCEPTED",
+    "TPSL_ORDER_STATUS_TRIGGERED",
+    "TPSL_ORDER_STATUS_SUCCESS",
+    "TPSL_ORDER_STATUS_CANCELLED",
+]
+StopType = Literal["TAKE_PROFIT", "STOP_LOSS", "STOP_TYPE_NONE"]
+
+
+class TpslOrder(WireModel):
+    order_id: Annotated[str, Field(min_length=1)]
+    account: EthereumAddress
+    market_id: MarketID
+    side: Literal["BUY", "SELL"]
+    size: NonnegativeDecimal
+    stop_type: Literal["TAKE_PROFIT", "STOP_LOSS"]
+    order_type: Literal["MARKET", "LIMIT"]
+    stop_price: PositiveDecimal
+    limit_price: NonnegativeDecimal
+    stop_price_option: Literal["LAST_TRADED_PRICE", "MARK_PRICE", "PRICE_OPTION_NONE"]
+    status: TpslStatus
+    tif: Literal["GTC", "GTT", "FOK", "IOC"]
+    created_at: Annotated[int, Field(ge=0)]
+    expires_at: Annotated[int, Field(ge=0)]
+    triggered_at: Annotated[int, Field(ge=0)]
+    triggered_price: NonnegativeDecimal | None = None
+    trigger_tx_hash: str = ""
+    triggered_tx_hash: str = ""
+    triggered_order_id: str = ""
+    cancel_reason: str = ""
+    size_percent_bps: Annotated[int, Field(ge=0, le=10000)] = 0
+    filled_size: NonnegativeDecimal | None = None
+
+    @field_validator("triggered_price", "filled_size", mode="before")
+    @classmethod
+    def empty_number(cls, value: object) -> object:
+        return None if value == "" else value
+
+    @property
+    def active(self) -> bool:
+        # Triggered can still be executing: it is not terminal.
+        return self.status in {"TPSL_ORDER_STATUS_ACCEPTED", "TPSL_ORDER_STATUS_TRIGGERED"}
+
+
+class TpslOrdersResponse(WireModel):
+    orders: tuple[TpslOrder, ...]
+    total: Annotated[int, Field(ge=0)]
+    page: Annotated[int, Field(ge=1)]
+    limit: Annotated[int, Field(ge=1, le=1000)]
+
+    @property
+    def has_next_page(self) -> bool:
+        return self.page * self.limit < self.total
+
+
 class AccountPosition(WireModel):
     size: FiniteDecimal
     quote_amount: FiniteDecimal
@@ -593,6 +682,8 @@ class AccountSnapshot(BaseModel):
     balances: Balances
     positions: tuple[Position, ...]
     open_orders: tuple[OpenOrder, ...]
+    # None means not queried; an empty tuple means queried and no active TP/SLs.
+    conditional_orders: tuple[TpslOrder, ...] | None = None
 
 
 class SubmissionResolution(BaseModel):
